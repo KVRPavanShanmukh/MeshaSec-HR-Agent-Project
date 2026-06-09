@@ -226,32 +226,41 @@ class TechnicalInterviewAgent:
                 "Please explain the architecture, your exact contribution, and one technical challenge you solved."
             )
         if self._question_count == 2 and self.resume.skills:
-            skill = self.resume.skills[0]
+            skill = self._skill_at(0)
             return (
                 f"Let's verify your depth in {skill}. Describe a production-grade use case, key implementation decisions, "
                 "and one failure mode you would watch for."
             )
         if self._question_count == 3:
-            return "Describe a difficult bug or outage you handled. What was the root cause, and how did you prove the fix worked?"
+            return (
+                f"Now let's discuss problem solving with {self._skill_at(1)}. Describe a difficult bug, outage, or technical issue you handled. "
+                "What was the root cause, and how did you prove the fix worked?"
+            )
         if self._question_count == 4:
-            return "Design a scalable backend for a resume-screening and interview platform. Cover APIs, storage, security, observability, and failure handling."
+            return (
+                f"Design a scalable system for a real feature related to your background using {self._skill_at(0)} and {self._skill_at(2)}. "
+                "Cover APIs, storage, security, observability, and failure handling."
+            )
         if self._question_count == 5:
-            return "Explain how you write tests and use code reviews or CI/CD to prevent regressions in a team environment."
+            return (
+                f"Explain how you would test, review, and deploy a {self._skill_at(0)} feature. "
+                "Include unit tests, code reviews, CI/CD, rollback, and monitoring."
+            )
         if self._question_count == 6:
             return "Tell me about a time you had to communicate a technical trade-off to a non-technical stakeholder."
         if self._question_count == 7:
             return (
-                "I want to verify practical programming fundamentals. Explain one important concept you have used in real code, "
+                f"I want to verify practical programming fundamentals in {self._skill_at(0)}. Explain one important concept you have used in real code, "
                 "such as OOP, exception handling, asynchronous processing, or data structures. Include an example."
             )
         if self._question_count == 8:
             return (
-                "Describe how you would improve the performance of a slow feature. Explain how you would measure the issue, "
+                f"Describe how you would improve the performance of a slow feature involving {self._skill_at(1)}. Explain how you would measure the issue, "
                 "identify the bottleneck, and confirm the improvement."
             )
         if self._question_count == 9:
             return (
-                "Final technical scenario: you must deliver a secure production feature under a deadline. How would you plan, "
+                f"Final technical scenario: you must deliver a secure production feature using {self._skill_at(0)} under a deadline. How would you plan, "
                 "implement, test, deploy, and monitor it?"
             )
         if "spring" in lower_focus:
@@ -284,6 +293,11 @@ class TechnicalInterviewAgent:
     def _resume_focus(self) -> str:
         if self.resume.skills:
             return self.resume.skills[self._question_count % len(self.resume.skills)]
+        return self._fallback_focus()
+
+    def _skill_at(self, index: int) -> str:
+        if self.resume.skills:
+            return self.resume.skills[index % len(self.resume.skills)]
         return self._fallback_focus()
 
     def _fallback_focus(self) -> str:

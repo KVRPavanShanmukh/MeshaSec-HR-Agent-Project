@@ -60,4 +60,7 @@ class InterviewReport:
     confidence_score: int = 0
     technical_depth_score: int = 0
     overall_score: int = 0
+    confidence_summary: dict[str, str | int | float] = field(default_factory=dict)
+    integrity_summary: dict[str, str | int | float | list[str]] = field(default_factory=dict)
+    recording_references: dict[str, str | list[str]] = field(default_factory=dict)
     generated_at: datetime = field(default_factory=datetime.now)

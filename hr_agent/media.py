@@ -1,5 +1,7 @@
 import threading
 import time
+import wave
+from io import BytesIO
 from dataclasses import dataclass
 
 
@@ -21,6 +23,13 @@ class MediaManager:
         self._camera_index = 0
         self._camera_backend = None
         self._last_camera_error = ""
+        self._last_frame_bgr = None
+        self._audio_thread = None
+        self._audio_stop_requested = False
+        self._audio_chunks: list[bytes] = []
+        self._audio_rate = 16000
+        self._audio_sample_width = 2
+        self._audio_recording = False
 
     def check_devices(self) -> DeviceStatus:
         camera_available = self._check_camera()
@@ -137,6 +146,80 @@ class MediaManager:
         except Exception as exc:
             return False, str(exc)
 
+    def start_audio_recording(self) -> bool:
+        if self._audio_recording:
+            return True
+        try:
+            import pyaudio
+        except Exception:
+            return False
+        self._audio_chunks = []
+        self._audio_stop_requested = False
+        self._audio_recording = True
+        self._audio_thread = threading.Thread(target=self._record_audio_worker, args=(pyaudio,), daemon=True)
+        self._audio_thread.start()
+        return True
+
+    def stop_audio_recording(self) -> tuple[bool, str, bytes]:
+        if not self._audio_recording:
+            return False, "Recording was not active.", b""
+        self._audio_stop_requested = True
+        if self._audio_thread:
+            self._audio_thread.join(timeout=4)
+        self._audio_recording = False
+        wav_bytes = self._wav_bytes()
+        if not wav_bytes:
+            return False, "No audio was captured.", b""
+        transcript = self._transcribe_wav(wav_bytes)
+        if not transcript:
+            return False, "Audio was recorded, but speech could not be converted to text.", wav_bytes
+        return True, transcript, wav_bytes
+
+    def is_audio_recording(self) -> bool:
+        return self._audio_recording
+
+    def _record_audio_worker(self, pyaudio_module) -> None:
+        audio = pyaudio_module.PyAudio()
+        stream = None
+        try:
+            fmt = pyaudio_module.paInt16
+            self._audio_sample_width = audio.get_sample_size(fmt)
+            stream = audio.open(format=fmt, channels=1, rate=self._audio_rate, input=True, frames_per_buffer=1024)
+            while not self._audio_stop_requested:
+                self._audio_chunks.append(stream.read(1024, exception_on_overflow=False))
+        except Exception:
+            pass
+        finally:
+            try:
+                if stream:
+                    stream.stop_stream()
+                    stream.close()
+            except Exception:
+                pass
+            audio.terminate()
+            self._audio_recording = False
+
+    def _wav_bytes(self) -> bytes:
+        if not self._audio_chunks:
+            return b""
+        buffer = BytesIO()
+        with wave.open(buffer, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(self._audio_sample_width)
+            wav.setframerate(self._audio_rate)
+            wav.writeframes(b"".join(self._audio_chunks))
+        return buffer.getvalue()
+
+    def _transcribe_wav(self, wav_bytes: bytes) -> str:
+        try:
+            import speech_recognition as sr
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(BytesIO(wav_bytes)) as source:
+                audio_data = recognizer.record(source)
+            return recognizer.recognize_google(audio_data)
+        except Exception:
+            return ""
+
     def start_camera(self) -> bool:
         try:
             import cv2
@@ -182,10 +265,14 @@ class MediaManager:
             self.stop_camera()
             self._last_camera_error = "Camera stream dropped. Attempting to reconnect."
             return None
+        self._last_frame_bgr = frame.copy()
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = cv2.flip(frame, 1)
         image = Image.fromarray(frame).resize((width, height))
         return ImageTk.PhotoImage(image)
+
+    def last_frame_bgr(self):
+        return self._last_frame_bgr
 
     def capture_camera_frame(self):
         return self.read_camera_frame(640, 360)

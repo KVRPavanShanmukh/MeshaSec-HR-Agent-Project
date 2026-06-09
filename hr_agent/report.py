@@ -45,6 +45,29 @@ def render_report(report: InterviewReport) -> str:
     lines.extend(["", "Key Observations", "-" * 16])
     lines.extend(f"- {item}" for item in report.observations)
 
+    if report.confidence_summary:
+        lines.extend(["", "Confidence & Engagement Analysis", "-" * 32])
+        for key, value in report.confidence_summary.items():
+            lines.append(f"- {key.replace('_', ' ').title()}: {value}")
+
+    if report.integrity_summary:
+        lines.extend(["", "Interview Integrity Report", "-" * 26])
+        for key, value in report.integrity_summary.items():
+            if key == "events" and isinstance(value, list):
+                lines.append("- Events:")
+                lines.extend(f"  - {event}" for event in value)
+            else:
+                lines.append(f"- {key.replace('_', ' ').title()}: {value}")
+
+    if report.recording_references:
+        lines.extend(["", "Recording References", "-" * 20])
+        for key, value in report.recording_references.items():
+            if isinstance(value, list):
+                lines.append(f"- {key.replace('_', ' ').title()}:")
+                lines.extend(f"  - {item}" for item in value)
+            else:
+                lines.append(f"- {key.replace('_', ' ').title()}: {value}")
+
     lines.extend(["", "Interview Transcript", "-" * 20])
     for index, turn in enumerate(report.turns, start=1):
         lines.append(f"{index}. Difficulty: {turn.difficulty} | Focus: {turn.focus_area}")

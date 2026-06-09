@@ -4,8 +4,8 @@ from .models import InterviewReport
 from .report import render_report
 
 
-BRAND_COLOR = "#183A59"
-ACCENT_COLOR = "#2F80ED"
+BRAND_COLOR = "#005F73"
+ACCENT_COLOR = "#F97316"
 
 
 def export_enterprise_pdf(report: InterviewReport, output_path: str) -> str:
@@ -59,6 +59,29 @@ def export_enterprise_pdf(report: InterviewReport, output_path: str) -> str:
     _bullet_section(story, "Weaknesses", report.weaknesses, styles, Paragraph)
     _bullet_section(story, "Key Observations", report.observations, styles, Paragraph)
 
+    if report.confidence_summary:
+        story.append(Paragraph("Confidence & Engagement Analysis", styles["Section"]))
+        for key, value in report.confidence_summary.items():
+            story.append(Paragraph(f"- {key.replace('_', ' ').title()}: {_escape(str(value))}", styles["BodySmall"]))
+
+    if report.integrity_summary:
+        story.append(Paragraph("Interview Integrity Report", styles["Section"]))
+        for key, value in report.integrity_summary.items():
+            if key == "events" and isinstance(value, list):
+                story.append(Paragraph("- Events:", styles["BodySmall"]))
+                for event in value[:12]:
+                    story.append(Paragraph("  - " + _escape(str(event)), styles["BodySmall"]))
+            else:
+                story.append(Paragraph(f"- {key.replace('_', ' ').title()}: {_escape(str(value))}", styles["BodySmall"]))
+
+    if report.recording_references:
+        story.append(Paragraph("Recording References", styles["Section"]))
+        for key, value in report.recording_references.items():
+            if isinstance(value, list):
+                story.append(Paragraph(f"- {key.replace('_', ' ').title()}: {len(value)} file(s)", styles["BodySmall"]))
+            else:
+                story.append(Paragraph(f"- {key.replace('_', ' ').title()}: {_escape(str(value))}", styles["BodySmall"]))
+
     story.append(Paragraph("Interview Transcript", styles["Section"]))
     for index, turn in enumerate(report.turns, start=1):
         story.append(Paragraph(f"<b>{index}. {turn.focus_area} ({turn.difficulty})</b>", styles["BodySmall"]))
@@ -79,7 +102,7 @@ def _score_chart(story, report, Table, TableStyle, colors, inch) -> None:
         ("Confidence", report.confidence_score),
     ]
     for label, score in metrics:
-        bars = "█" * max(1, score // 10) + "░" * max(0, 10 - score // 10)
+        bars = "#" * max(1, score // 10) + "-" * max(0, 10 - score // 10)
         rows.append([label, f"{score}/100", bars])
     table = Table(rows, colWidths=[2.4 * inch, 1.0 * inch, 2.8 * inch])
     table.setStyle(TableStyle([

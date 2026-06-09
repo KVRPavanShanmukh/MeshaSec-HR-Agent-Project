@@ -3,15 +3,19 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from hr_agent.agent import TechnicalInterviewAgent
+from hr_agent.confidence import ConfidenceAnalyzer
 from hr_agent.emailer import EmailSettings, send_report_email
+from hr_agent.integrity import IntegrityMonitor
 from hr_agent.media import MediaManager
 from hr_agent.models import CandidateProfile, ResumeInsight
 from hr_agent.pdf_report import export_enterprise_pdf
+from hr_agent.recording import InterviewRecorder
 from hr_agent.report import render_report
 from hr_agent.resume_parser import parse_resume
 from hr_agent.storage import save_session
@@ -19,12 +23,12 @@ from hr_agent.storage import save_session
 
 APP_TITLE = "MESHASEC AI HR Interview Agent"
 CONFIG_FILE = Path.home() / ".ai_hr_agent_config.json"
-BRAND = "#16324f"
-ACCENT = "#2f80ed"
-SUCCESS = "#0f8f5f"
-DANGER = "#bf2f45"
+BRAND = "#005F73"
+ACCENT = "#F97316"
+SUCCESS = "#0A9396"
+DANGER = "#AE2012"
 SURFACE = "#ffffff"
-BG = "#eef3f8"
+BG = "#E6F7FB"
 
 
 def resource_path(relative_path: str) -> Path:
@@ -44,6 +48,9 @@ class EnterpriseHRApp(tk.Tk):
         self.bind("<Escape>", lambda event: "break")
 
         self.media = MediaManager()
+        self.recorder = InterviewRecorder()
+        self.confidence_analyzer = ConfidenceAnalyzer()
+        self.integrity_monitor = IntegrityMonitor()
         self.agent = TechnicalInterviewAgent()
         self.resume = ResumeInsight()
         self.report = None
@@ -56,6 +63,11 @@ class EnterpriseHRApp(tk.Tk):
         self.camera_running = False
         self.recording = False
         self.device_status = None
+        self.session_dir = None
+        self.video_recording_started = False
+        self.last_confidence_sample = 0.0
+        self.last_focus_loss = 0.0
+        self.last_webcam_issue = 0.0
 
         self.profile_vars = {
             "name": tk.StringVar(),
@@ -76,7 +88,15 @@ class EnterpriseHRApp(tk.Tk):
             "sender_password": tk.StringVar(),
             "use_tls": tk.BooleanVar(value=True),
         }
+        self.feature_vars = {
+            "voice_interview": tk.BooleanVar(value=True),
+            "confidence_analysis": tk.BooleanVar(value=True),
+            "integrity_monitoring": tk.BooleanVar(value=True),
+            "recording_package": tk.BooleanVar(value=True),
+        }
         self.screen = tk.StringVar(value="welcome")
+        self.bind("<FocusOut>", self._on_focus_lost)
+        self.bind("<FocusIn>", self._on_focus_in)
 
         self._style()
         self._load_config()
@@ -100,7 +120,7 @@ class EnterpriseHRApp(tk.Tk):
         style.configure("Logo.TLabel", background=BRAND, foreground="#ffffff", font=("Segoe UI", 18, "bold"))
         style.configure("TButton", font=("Segoe UI", 10), padding=(12, 8))
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"), foreground="#ffffff", background=ACCENT, padding=(14, 9))
-        style.map("Accent.TButton", background=[("active", "#1f6fd1")])
+        style.map("Accent.TButton", background=[("active", "#EA580C")])
         style.configure("Success.TButton", font=("Segoe UI", 10, "bold"), foreground="#ffffff", background=SUCCESS, padding=(14, 9))
         style.configure("Danger.TButton", font=("Segoe UI", 10, "bold"), foreground="#ffffff", background=DANGER, padding=(14, 9))
         style.configure("Horizontal.TProgressbar", troughcolor="#d7e2ef", background=ACCENT, thickness=8)
@@ -131,8 +151,8 @@ class EnterpriseHRApp(tk.Tk):
                 padx=22,
                 pady=13,
                 bg=BRAND,
-                fg="#dbeafe",
-                activebackground="#244a70",
+                fg="#E0FBFC",
+                activebackground="#0A9396",
                 activeforeground="#ffffff",
                 font=("Segoe UI", 10, "bold"),
                 command=lambda item=key: self.show_screen(item),
@@ -197,7 +217,7 @@ class EnterpriseHRApp(tk.Tk):
         self.screen.set(name)
         for key, button in self.nav_buttons.items():
             active = key == name
-            button.configure(bg="#244a70" if active else BRAND, fg="#ffffff" if active else "#dbeafe")
+            button.configure(bg=ACCENT if active else BRAND, fg="#ffffff" if active else "#E0FBFC")
         self._enforce_fullscreen()
 
     def _enforce_fullscreen(self) -> None:
@@ -343,13 +363,22 @@ class EnterpriseHRApp(tk.Tk):
         self.speak_button.pack(side="left")
         self.stop_speak_button = ttk.Button(self.assist_controls, text="Stop Reading", command=self.stop_reading)
         self.stop_speak_button.pack(side="left", padx=(10, 0))
-        self.record_button = ttk.Button(actions, text="Record Voice Answer", command=self.capture_voice)
+        self.record_button = ttk.Button(actions, text="Start Recording", command=self.start_voice_recording)
         self.record_button.pack(side="left", padx=(10, 0))
+        self.stop_record_button = ttk.Button(actions, text="Stop Recording", command=self.stop_voice_recording, state="disabled")
+        self.stop_record_button.pack(side="left", padx=(10, 0))
         ttk.Button(actions, text="Submit Answer", style="Accent.TButton", command=self.submit_answer).pack(side="right")
         self.voice_status = ttk.Label(left, text="Voice status: ready", style="Muted.TLabel")
         self.voice_status.pack(anchor="w", pady=(8, 0))
 
         ttk.Label(right, text="Session", style="H2.TLabel").pack(anchor="w")
+        self.supportive_label = ttk.Label(
+            right,
+            text="Confidence metrics are supportive indicators only, not final hiring criteria.",
+            style="Muted.TLabel",
+            wraplength=260,
+        )
+        self.supportive_label.pack(anchor="w", pady=(6, 8))
         self.progress = ttk.Progressbar(right, maximum=100)
         self.progress.pack(fill="x", pady=(10, 0))
         self.progress_label = ttk.Label(right, text="Question 0 / 10", style="Muted.TLabel")
@@ -377,6 +406,7 @@ class EnterpriseHRApp(tk.Tk):
         ttk.Button(row, text="Open Dashboard", style="Accent.TButton", command=lambda: self.show_screen("dashboard")).pack(side="left")
         ttk.Button(row, text="Save PDF Report", command=self.save_pdf_report).pack(side="left", padx=(10, 0))
         ttk.Button(row, text="Email Report To HR", command=self.email_report).pack(side="left", padx=(10, 0))
+        ttk.Button(row, text="Download Interview Package", command=self.download_interview_package).pack(side="left", padx=(10, 0))
 
     def _dashboard_screen(self) -> None:
         frame = self.screens["dashboard"]
@@ -392,6 +422,7 @@ class EnterpriseHRApp(tk.Tk):
         ttk.Button(controls, text="Refresh Dashboard", style="Accent.TButton", command=self.refresh_dashboard).pack(side="left")
         ttk.Button(controls, text="Download PDF Report", command=self.save_pdf_report).pack(side="left", padx=(10, 0))
         ttk.Button(controls, text="Email Report", command=self.email_report).pack(side="left", padx=(10, 0))
+        ttk.Button(controls, text="Download Interview Package", command=self.download_interview_package).pack(side="left", padx=(10, 0))
         report_frame = ttk.Frame(frame)
         report_frame.pack(fill="both", expand=True)
         self.report_view = tk.Text(report_frame, wrap="word", font=("Consolas", 9), bg=SURFACE)
@@ -421,6 +452,13 @@ class EnterpriseHRApp(tk.Tk):
         ttk.Label(voice, text="Interviewer Voice", style="H2.TLabel").pack(anchor="w")
         ttk.Label(voice, text="Speaking Speed", style="Card.TLabel").pack(anchor="w", pady=(10, 0))
         ttk.Scale(voice, from_=120, to=190, variable=self.profile_vars["voice_rate"], orient="horizontal").pack(fill="x", pady=(6, 0))
+
+        modules = self._card(frame)
+        ttk.Label(modules, text="Feature Modules", style="H2.TLabel").pack(anchor="w")
+        ttk.Checkbutton(modules, text="Voice interview recording and transcripts", variable=self.feature_vars["voice_interview"]).pack(anchor="w", pady=(8, 0))
+        ttk.Checkbutton(modules, text="Webcam confidence analysis", variable=self.feature_vars["confidence_analysis"]).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(modules, text="Interview integrity monitoring", variable=self.feature_vars["integrity_monitoring"]).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(modules, text="Local interview recording package", variable=self.feature_vars["recording_package"]).pack(anchor="w", pady=(6, 0))
 
     def _meeting_screen(self) -> None:
         frame = self.screens["meeting"]
@@ -523,6 +561,12 @@ class EnterpriseHRApp(tk.Tk):
         if not self._can_enter_live():
             return
         self.agent = TechnicalInterviewAgent()
+        self.confidence_analyzer = ConfidenceAnalyzer()
+        self.integrity_monitor = IntegrityMonitor()
+        if self.feature_vars["recording_package"].get():
+            self.session_dir = self.recorder.start_session(self.profile_vars["name"].get(), self.profile_vars["email"].get())
+            self.recorder.start_video(620, 348)
+            self.video_recording_started = True
         self.agent.set_interviewer(self.interviewer_name())
         self.agent.set_resume(self.resume)
         self.report = None
@@ -570,8 +614,37 @@ class EnterpriseHRApp(tk.Tk):
             self.assist_controls.pack_forget()
 
     def finish_interview(self) -> None:
+        self.media.stop_speaking()
+        video_path = self.recorder.finalize_video() if self.video_recording_started else ""
         self.report = self.agent.build_report(self._profile(), self.resume)
+        if self.feature_vars["confidence_analysis"].get():
+            confidence = self.confidence_analyzer.summary()
+            self.report.confidence_summary = confidence
+            if isinstance(confidence.get("confidence_score"), int):
+                self.report.confidence_score = int(confidence["confidence_score"])
+                competency_average = round(sum(item.score for item in self.report.competencies) / max(len(self.report.competencies), 1))
+                self.report.overall_score = round((competency_average * 0.55) + (self.report.technical_depth_score * 0.3) + (self.report.confidence_score * 0.15))
+                self.report.recommendation = self._recommendation_for_score(self.report.overall_score)
+        if self.feature_vars["integrity_monitoring"].get():
+            self.report.integrity_summary = self.integrity_monitor.summary()
+        if self.feature_vars["recording_package"].get():
+            refs = self.recorder.references()
+            if video_path:
+                refs["video_file"] = video_path
+            if self.session_dir:
+                refs["final_report_pdf"] = str(Path(self.session_dir) / "final_report.pdf")
+            self.report.recording_references = refs
+            self.recorder.save_json("integrity_report.json", self.report.integrity_summary)
+            self.recorder.save_json("confidence_report.json", self.report.confidence_summary)
+            integrity_lines = [f"{key}: {value}" for key, value in self.report.integrity_summary.items() if key != "events"]
+            integrity_lines.extend(self.report.integrity_summary.get("events", []) if isinstance(self.report.integrity_summary.get("events"), list) else [])
+            self.recorder.save_simple_pdf("integrity_report.pdf", "Interview Integrity Report", integrity_lines)
         self.report_text = render_report(self.report)
+        if self.feature_vars["recording_package"].get() and self.session_dir:
+            try:
+                export_enterprise_pdf(self.report, self.report.recording_references.get("final_report_pdf", ""))
+            except Exception:
+                pass
         save_session(self.report)
         self.completion_label.configure(text=f"Interview Complete: {self.report.recommendation}")
         self.completion_summary.configure(
@@ -579,6 +652,25 @@ class EnterpriseHRApp(tk.Tk):
         )
         self.refresh_dashboard()
         self.show_screen("complete")
+
+    def _recommendation_for_score(self, score: int) -> str:
+        if score >= 80:
+            return "Strong Hire"
+        if score >= 68:
+            return "Hire"
+        if score >= 55:
+            return "Hold / Needs Human Review"
+        return "No Hire"
+
+    def download_interview_package(self) -> None:
+        if not self.report:
+            messagebox.showinfo(APP_TITLE, "Complete an interview before creating an interview package.")
+            return
+        package = self.recorder.create_package()
+        if not package:
+            messagebox.showwarning(APP_TITLE, "No recording package is available for this interview.")
+            return
+        messagebox.showinfo(APP_TITLE, f"Interview package created:\n{package}")
 
     def start_reading(self, prefix: str = "") -> None:
         if not self.current_question:
@@ -600,27 +692,45 @@ class EnterpriseHRApp(tk.Tk):
         else:
             self.voice_status.configure(text="Voice status: ready")
 
-    def capture_voice(self) -> None:
+    def start_voice_recording(self) -> None:
+        if not self.feature_vars["voice_interview"].get():
+            messagebox.showinfo(APP_TITLE, "Voice interview module is disabled in Settings.")
+            return
         if self.recording:
+            return
+        if not self.media.start_audio_recording():
+            self.voice_status.configure(text="Voice status: microphone recording could not start.")
+            messagebox.showwarning(APP_TITLE, "Unable to start microphone recording. Check microphone permissions.")
             return
         self.recording = True
         self.record_button.configure(state="disabled", text="Recording...")
-        self.voice_status.configure(text="Voice status: listening. Speak your full answer now.")
-        threading.Thread(target=self._capture_voice_worker, daemon=True).start()
+        self.stop_record_button.configure(state="normal")
+        self.voice_status.configure(text="Voice status: recording. Click Stop Recording when finished.")
 
-    def _capture_voice_worker(self) -> None:
-        ok, result = self.media.listen_once(timeout=18, phrase_time_limit=60)
-        self.after(0, lambda: self._finish_voice_capture(ok, result))
+    def stop_voice_recording(self) -> None:
+        if not self.recording:
+            return
+        self.stop_record_button.configure(state="disabled")
+        self.voice_status.configure(text="Voice status: processing audio transcript...")
+        threading.Thread(target=self._stop_recording_worker, daemon=True).start()
 
-    def _finish_voice_capture(self, ok: bool, result: str) -> None:
+    def _stop_recording_worker(self) -> None:
+        ok, transcript, wav_bytes = self.media.stop_audio_recording()
+        self.after(0, lambda: self._finish_voice_capture(ok, transcript, wav_bytes))
+
+    def _finish_voice_capture(self, ok: bool, transcript: str, wav_bytes: bytes) -> None:
         self.recording = False
-        self.record_button.configure(state="normal", text="Record Voice Answer")
+        self.record_button.configure(state="normal", text="Start Recording")
+        self.stop_record_button.configure(state="disabled")
+        if wav_bytes and self.feature_vars["recording_package"].get():
+            question_index = len(self.agent.turns) + 1
+            self.recorder.save_audio(question_index, wav_bytes)
         if ok:
             self.answer_box.delete("1.0", "end")
-            self.answer_box.insert("1.0", result)
-            self.voice_status.configure(text="Voice status: answer captured. Click Submit Answer to continue.")
+            self.answer_box.insert("1.0", transcript)
+            self.voice_status.configure(text="Voice status: transcript captured. Click Submit Answer to continue.")
         else:
-            self.voice_status.configure(text=f"Voice status: {result}")
+            self.voice_status.configure(text=f"Voice status: {transcript}")
 
     def refresh_dashboard(self) -> None:
         if not self.report:
@@ -718,6 +828,7 @@ class EnterpriseHRApp(tk.Tk):
         data = {
             "email": {key: var.get() for key, var in self.email_vars.items()},
             "profile": {"hr_email": self.profile_vars["hr_email"].get()},
+            "features": {key: var.get() for key, var in self.feature_vars.items()},
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         messagebox.showinfo(APP_TITLE, "Settings saved.")
@@ -732,6 +843,9 @@ class EnterpriseHRApp(tk.Tk):
         for key, value in data.get("email", {}).items():
             if key in self.email_vars:
                 self.email_vars[key].set(value)
+        for key, value in data.get("features", {}).items():
+            if key in self.feature_vars:
+                self.feature_vars[key].set(value)
         self._repair_common_email_setting_mistakes()
         hr_email = data.get("profile", {}).get("hr_email")
         if hr_email:
@@ -766,6 +880,8 @@ class EnterpriseHRApp(tk.Tk):
         self.transcript.insert("end", f"{index}. Q: {question}\nA: {answer}\n\n")
         self.transcript.configure(state="disabled")
         self.transcript.see("end")
+        if self.feature_vars["recording_package"].get():
+            self.recorder.append_transcript(index, question, answer)
 
     def _update_progress(self) -> None:
         total = max(10, int(self.profile_vars["max_questions"].get()))
@@ -785,16 +901,43 @@ class EnterpriseHRApp(tk.Tk):
         frame = self.media.read_camera_frame(width, height)
         if frame:
             self.camera_image = frame
+            raw_frame = self.media.last_frame_bgr()
             if prep_visible:
                 self.camera_label.configure(image=self.camera_image, text="")
             if live_visible:
                 self.user_panel.configure(image=self.camera_image, text="")
+                self._observe_live_frame(raw_frame)
         else:
             if prep_visible:
                 self.camera_label.configure(text="Reconnecting camera...", image="")
             if live_visible:
                 self.user_panel.configure(text="Reconnecting camera...", image="")
+                if self.feature_vars["integrity_monitoring"].get() and time.time() - self.last_webcam_issue > 10:
+                    self.integrity_monitor.webcam_unavailable()
+                    self.last_webcam_issue = time.time()
         self.after(80, self._refresh_camera_preview)
+
+    def _observe_live_frame(self, raw_frame) -> None:
+        if raw_frame is None:
+            return
+        if self.feature_vars["recording_package"].get():
+            self.recorder.write_video_frame(raw_frame)
+        if self.feature_vars["confidence_analysis"].get() and time.time() - self.last_confidence_sample > 1.0:
+            metric = self.confidence_analyzer.analyze_frame(raw_frame)
+            self.last_confidence_sample = time.time()
+            if self.feature_vars["integrity_monitoring"].get():
+                self.integrity_monitor.observe_faces(metric.face_count)
+
+    def _on_focus_lost(self, _event) -> None:
+        if self.screen.get() != "live" or not self.feature_vars["integrity_monitoring"].get():
+            return
+        now = time.time()
+        if now - self.last_focus_loss > 3:
+            self.integrity_monitor.focus_lost()
+            self.last_focus_loss = now
+
+    def _on_focus_in(self, _event) -> None:
+        pass
 
     def _close_app(self) -> None:
         self.camera_running = False
