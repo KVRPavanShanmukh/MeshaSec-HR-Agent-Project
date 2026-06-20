@@ -75,3 +75,9 @@ $env:OPENAI_MODEL="gpt-4.1-mini"
 ```
 
 Voice playback can be enabled or disabled during the session. The avatar animation is provider-neutral and retains the existing HR image as its fallback.
+
+## Evidence-Based Scoring
+
+The evaluator reviews every answer in relation to its question. When AI evaluation is configured, the complete transcript is assessed for correctness, relevance, conceptual depth, implementation evidence, reasoning, trade-offs, validation, and outcomes. If AI evaluation is unavailable, a deterministic per-answer rubric produces question-numbered evidence. Keyword mentions alone do not earn high scores.
+
+The ten-question plan intentionally covers distinct relevant domains such as resume projects, programming fundamentals, debugging, networking, cloud infrastructure, databases, security, testing, delivery, and integrated system design.

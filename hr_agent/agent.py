@@ -16,7 +16,8 @@ TECH_KEYWORDS = {
     "C++": ["c++", "cpp"],
     "SQL": ["sql", "postgres", "postgresql", "mysql", "oracle", "sqlite", "joins", "index"],
     "NoSQL": ["mongodb", "redis", "dynamodb", "cassandra", "nosql"],
-    "Cloud": ["aws", "azure", "gcp", "cloud", "lambda", "s3", "ec2", "kubernetes", "docker"],
+    "Cloud": ["aws", "azure", "gcp", "cloud", "lambda", "s3", "ec2", "kubernetes", "docker", "iam", "vpc", "serverless"],
+    "Networking": ["network", "tcp", "udp", "ip", "dns", "http", "https", "subnet", "routing", "router", "switch", "firewall", "osi", "vpn"],
     "DevOps": ["ci/cd", "jenkins", "github actions", "gitlab", "docker", "terraform", "monitoring"],
     "System Design": ["microservice", "scalability", "load balancer", "cache", "queue", "event", "distributed"],
     "Testing": ["unit test", "integration test", "pytest", "jest", "selenium", "mock", "coverage"],
@@ -251,12 +252,12 @@ class TechnicalInterviewAgent:
             return None
 
         transcript = "\n".join(
-            f"Q: {turn.question}\nA: {turn.answer}" for turn in self.turns[-4:]
+            f"Q: {turn.question}\nA: {turn.answer}" for turn in self.turns
         )
         prompt = (
             "You are an expert technical HR interviewer. Generate exactly one concise follow-up "
             "technical interview question based on the candidate's latest answer. "
-            "Verify depth, adapt difficulty, and avoid asking for personal data.\n\n"
+            "Verify depth, adapt difficulty, and avoid asking for personal data. Ask a distinct domain not already covered when possible: programming, algorithms, networking (TCP/IP, DNS, HTTP, routing, subnets), cloud (IAM, VPC, scaling, availability), databases, system design, security, testing, or delivery. Distinguish application programming from network transport and cloud infrastructure.\n\n"
             f"Role: {profile.role}\nExperience: {profile.experience_years}\n"
             f"Resume skills: {', '.join(self.resume.skills[:12])}\nResume projects: {'; '.join(self.resume.projects[:4])}\n"
             f"Resume experience: {'; '.join(self.resume.experience[:4])}\nResume context: {self.resume.summary[:900]}\n"
@@ -287,49 +288,26 @@ class TechnicalInterviewAgent:
 
     def _heuristic_question(self, focus_skill: str, answer: str) -> str:
         lower_focus = focus_skill.lower()
-        if self._question_count == 1 and self.resume.projects:
-            return (
-                f"Your resume mentions this project: {self.resume.projects[0]}. "
-                "Please explain the architecture, your exact contribution, and one technical challenge you solved."
-            )
-        if self._question_count == 2 and self.resume.skills:
-            skill = self._skill_at(0)
-            return (
-                f"Let's verify your depth in {skill}. Describe a production-grade use case, key implementation decisions, "
-                "and one failure mode you would watch for."
-            )
+        if self._question_count == 1:
+            if self.resume.projects:
+                return f"Your resume mentions this project: {self.resume.projects[0]}. Explain its architecture, your exact contribution, one difficult decision, and the measured result."
+            return "Describe a substantial project you completed, its architecture, your exact contribution, one difficult decision, and the result."
+        if self._question_count == 2:
+            return f"Let's verify your depth in {self._skill_at(0)}. Explain a production use case, implementation decisions, limitations, and one failure mode."
         if self._question_count == 3:
-            return (
-                f"Now let's discuss problem solving with {self._skill_at(1)}. Describe a difficult bug, outage, or technical issue you handled. "
-                "What was the root cause, and how did you prove the fix worked?"
-            )
+            return f"Using {self._skill_at(1)}, describe a difficult bug or outage. Explain evidence gathering, root cause, alternatives considered, and how you proved the fix."
         if self._question_count == 4:
-            return (
-                f"Design a scalable system for a real feature related to your background using {self._skill_at(0)} and {self._skill_at(2)}. "
-                "Cover APIs, storage, security, observability, and failure handling."
-            )
+            return "Explain the networking path for a user request from DNS through TCP/TLS and HTTP to an application. Include routing, load balancing, failure diagnosis, and how networking differs from programming."
         if self._question_count == 5:
-            return (
-                f"Explain how you would test, review, and deploy a {self._skill_at(0)} feature. "
-                "Include unit tests, code reviews, CI/CD, rollback, and monitoring."
-            )
+            return f"Design a secure cloud deployment for a {self._skill_at(0)} service. Explain compute, storage, IAM, VPC networking, scaling, availability, monitoring, cost trade-offs, and how cloud infrastructure differs from the program."
         if self._question_count == 6:
-            return "Tell me about a time you had to communicate a technical trade-off to a non-technical stakeholder."
+            return f"For a data-intensive feature involving {self._skill_at(1)}, choose SQL or NoSQL and justify schema design, indexing, transactions or consistency, and performance validation."
         if self._question_count == 7:
-            return (
-                f"I want to verify practical programming fundamentals in {self._skill_at(0)}. Explain one important concept you have used in real code, "
-                "such as OOP, exception handling, asynchronous processing, or data structures. Include an example."
-            )
+            return f"Demonstrate programming fundamentals using {self._skill_at(0)}. Explain one algorithm or data structure, complexity, error handling, and a concrete implementation example."
         if self._question_count == 8:
-            return (
-                f"Describe how you would improve the performance of a slow feature involving {self._skill_at(1)}. Explain how you would measure the issue, "
-                "identify the bottleneck, and confirm the improvement."
-            )
+            return f"Explain how you would test, review, secure, deploy, and observe a {self._skill_at(2)} change. Include CI/CD, rollback, incident response, and measurable release criteria."
         if self._question_count == 9:
-            return (
-                f"Final technical scenario: you must deliver a secure production feature using {self._skill_at(0)} under a deadline. How would you plan, "
-                "implement, test, deploy, and monitor it?"
-            )
+            return f"Final scenario: design a secure and reliable production feature using {self._skill_at(0)}. Connect application logic, network boundaries, cloud resources, data storage, testing, and monitoring, and explain the key trade-offs."
         if "spring" in lower_focus:
             return "In Spring Boot, how would you structure services, transactions, exception handling, and security for a production REST API?"
         if "docker" in lower_focus:
@@ -550,6 +528,9 @@ class TechnicalInterviewAgent:
         technical = [item.score for item in competencies if item.name != "Communication Skills"]
         competency_avg = round(sum(technical) / max(len(technical), 1))
         return round((skill_avg * 0.55) + (competency_avg * 0.45))
+
+
+
 
 
 
