@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import re
 import urllib.error
@@ -40,26 +40,17 @@ class TechnicalInterviewAgent:
         self._question_count = 0
         self.resume = ResumeInsight()
         self.interviewer_name = "Shanmukh"
+        self.last_generation_source = "fallback"
+        self.last_generation_error = ""
 
     def set_interviewer(self, name: str) -> None:
         self.interviewer_name = name or "Shanmukh"
 
     def opening_question(self, profile: CandidateProfile, resume: ResumeInsight | None = None) -> str:
-        role = profile.role or "the target role"
-        exp = f" with {profile.experience_years} years of experience" if profile.experience_years else ""
-        resume = resume or self.resume
-        skills = ", ".join(resume.skills[:5])
-        if skills:
-            return (
-                f"Hello, I'm {self.interviewer_name}, your AI HR Interviewer. I'll be conducting today's interview for {role}{exp} "
-                "and assessing your communication skills, technical knowledge, confidence, and overall suitability for the role. "
-                f"I reviewed your resume and noticed {skills}. Please introduce yourself and explain one resume project where these skills created business or technical impact."
-            )
         return (
-            f"Hello, I'm {self.interviewer_name}, your AI HR Interviewer. I'll be conducting today's interview for {role}{exp}. "
-            "Please introduce yourself, mention your strongest technical skills, and describe one recent project you worked on."
+            f"Hello, I'm {self.interviewer_name}, your AI HR Interviewer. "
+            "Please introduce yourself, summarize your background, and describe one project or achievement you are most proud of."
         )
-
     def record_answer(self, question: str, answer: str, focus_area: str = "General") -> InterviewTurn:
         evidence = self._evidence_from_answer(answer)
         turn = InterviewTurn(
@@ -81,13 +72,21 @@ class TechnicalInterviewAgent:
         if not self.turns:
             return self.opening_question(profile, self.resume), "Resume Introduction"
 
-        if self._question_count >= 10:
-            return "Thank you. The interview is complete and the HR assessment report will now be generated.", "Completion"
 
         answer = self.turns[-1].answer
         skills = self.extract_skills(answer)
         focus_skill = skills[0] if skills else self._resume_focus()
+        self.last_generation_error = ""
+        question = self._openai_question(profile)
+        if question and not self._is_repeated_question(question):
+            self.last_generation_source = "ai"
+            return question, focus_skill
+        if os.getenv("OPENAI_API_KEY", "").strip() and not question:
+            self.last_generation_error = "AI generation was unavailable. A fallback question was selected."
         question = self._heuristic_question(focus_skill, answer)
+        if self._is_repeated_question(question):
+            question = self._unique_fallback_question(focus_skill)
+        self.last_generation_source = "fallback"
         return question, focus_skill
 
     def should_finish(self, max_questions: int) -> bool:
@@ -168,17 +167,84 @@ class TechnicalInterviewAgent:
         return assessments
 
     def score_competencies(self) -> list[CompetencyScore]:
-        all_answers = "\n".join(turn.answer for turn in self.turns)
-        words = all_answers.lower()
-        scores = []
-        scores.append(self._score_programming(words))
-        scores.append(self._score_problem_solving(words))
-        scores.append(self._score_system_design(words))
-        scores.append(self._score_database(words))
-        scores.append(self._score_practices(words))
-        scores.append(self._score_communication())
-        return scores
+        ai_scores = self._openai_competency_evaluation()
+        if ai_scores:
+            return ai_scores
+        rubrics = {
+            "Programming Fundamentals": ["algorithm", "data structure", "oop", "class", "function", "exception", "async", "complexity", "memory", "thread"],
+            "Problem Solving": ["debug", "root cause", "hypothesis", "analyze", "reproduce", "verify", "edge case", "incident", "bottleneck"],
+            "System Design": ["scale", "cache", "queue", "load balancer", "microservice", "latency", "availability", "api", "security", "observability"],
+            "Database Knowledge": ["sql", "index", "join", "transaction", "normalization", "query", "postgres", "mysql", "mongodb", "consistency"],
+            "Software Development Practices": ["git", "code review", "ci/cd", "test", "deploy", "rollback", "monitoring", "documentation", "agile"],
+            "Communication Skills": ["because", "first", "then", "for example", "result", "therefore", "trade-off"],
+        }
+        return [self._evidence_rubric_score(name, signals) for name, signals in rubrics.items()]
 
+    def _evidence_rubric_score(self, name: str, signals: list[str]) -> CompetencyScore:
+        relevant = []
+        for index, turn in enumerate(self.turns, start=1):
+            combined = f"{turn.question} {turn.answer}".lower()
+            if name == "Communication Skills" or any(signal in combined for signal in signals):
+                relevant.append((index, turn))
+        if not relevant:
+            return CompetencyScore(name, 15, ["No question-answer evidence demonstrated this competency."])
+        turn_scores = []
+        evidence = []
+        for index, turn in relevant:
+            answer = turn.answer.strip()
+            lower = answer.lower()
+            if self._is_non_answer(answer):
+                turn_scores.append(5)
+                evidence.append(f"Q{index}: Non-substantive response; no assessable evidence.")
+                continue
+            score = 18
+            words = len(answer.split())
+            score += min(16, words // 5)
+            concept_hits = [signal for signal in signals if signal in lower]
+            score += min(18, len(concept_hits) * 4)
+            practical = [term for term in ["implemented", "built", "configured", "deployed", "debugged", "designed", "used"] if term in lower]
+            reasoning = [term for term in ["because", "therefore", "root cause", "trade-off", "alternative", "reason"] if term in lower]
+            validation = [term for term in ["tested", "measured", "verified", "monitored", "benchmark", "result", "%", "latency"] if term in lower]
+            score += min(16, len(practical) * 4)
+            score += min(15, len(reasoning) * 5)
+            score += min(15, len(validation) * 4)
+            if words < 12:
+                score = min(score, 30)
+            turn_scores.append(min(score, 95))
+            markers = concept_hits[:3] + practical[:2] + reasoning[:1] + validation[:1]
+            quote = self._short_quote(answer)
+            evidence.append(f"Q{index}: {quote} | Evidence markers: {', '.join(markers) or 'limited specificity'}.")
+        weighted = round(sum(turn_scores) / len(turn_scores))
+        coverage = len(relevant) / max(len(self.turns), 1)
+        final_score = round((weighted * 0.9) + (min(1.0, coverage * 2) * 10))
+        return CompetencyScore(name, max(5, min(final_score, 95)), evidence[:5])
+
+    def _openai_competency_evaluation(self) -> list[CompetencyScore] | None:
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key or not self.turns:
+            return None
+        transcript = "\n\n".join(f"Q{index}: {turn.question}\nA{index}: {turn.answer}" for index, turn in enumerate(self.turns, 1))
+        prompt = (
+            "Evaluate this technical interview rigorously. Read every answer in relation to its question. "
+            "Do not award points for merely mentioning keywords. Assess correctness, relevance, conceptual understanding, "
+            "implementation detail, reasoning, trade-offs, validation, and measurable outcomes. Penalize vague, incorrect, "
+            "contradictory, copied-sounding, or non-responsive answers. Return JSON only with key competencies, an array of "
+            "exactly six objects containing name, score (0-100), and evidence (2-4 concise transcript-grounded strings). "
+            f"Required names: {', '.join(COMPETENCIES)}.\nRole: {self.resume.summary[:300]}\nTranscript:\n{transcript[:12000]}"
+        )
+        body = {"model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"), "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 1400, "response_format": {"type": "json_object"}}
+        request = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps(body).encode("utf-8"), headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=35) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            data = json.loads(payload["choices"][0]["message"]["content"])
+            items = data.get("competencies", [])
+            by_name = {str(item.get("name")): item for item in items}
+            if any(name not in by_name for name in COMPETENCIES):
+                return None
+            return [CompetencyScore(name, max(0, min(int(by_name[name]["score"]), 100)), [str(value) for value in by_name[name].get("evidence", [])][:4]) for name in COMPETENCIES]
+        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, ValueError, TypeError, TimeoutError, json.JSONDecodeError):
+            return None
     def _openai_question(self, profile: CandidateProfile) -> str | None:
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
@@ -192,7 +258,8 @@ class TechnicalInterviewAgent:
             "technical interview question based on the candidate's latest answer. "
             "Verify depth, adapt difficulty, and avoid asking for personal data.\n\n"
             f"Role: {profile.role}\nExperience: {profile.experience_years}\n"
-            f"Resume skills: {', '.join(self.resume.skills[:12])}\nResume summary: {self.resume.summary[:600]}\n"
+            f"Resume skills: {', '.join(self.resume.skills[:12])}\nResume projects: {'; '.join(self.resume.projects[:4])}\n"
+            f"Resume experience: {'; '.join(self.resume.experience[:4])}\nResume context: {self.resume.summary[:900]}\n"
             f"Current difficulty: {self.difficulty}\nTranscript:\n{transcript}\n\nQuestion:"
         )
         body = {
@@ -215,7 +282,7 @@ class TechnicalInterviewAgent:
                 payload = json.loads(response.read().decode("utf-8"))
             question = payload["choices"][0]["message"]["content"].strip()
             return question if question.endswith("?") else question + "?"
-        except (urllib.error.URLError, KeyError, TimeoutError, json.JSONDecodeError):
+        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, TimeoutError, json.JSONDecodeError):
             return None
 
     def _heuristic_question(self, focus_skill: str, answer: str) -> str:
@@ -290,6 +357,27 @@ class TechnicalInterviewAgent:
             "your implementation choices, and the result?"
         )
 
+    def _is_repeated_question(self, question: str) -> bool:
+        normalized = set(re.findall(r"[a-z0-9+#.]+", question.lower()))
+        for turn in self.turns:
+            previous = set(re.findall(r"[a-z0-9+#.]+", turn.question.lower()))
+            union = normalized | previous
+            if union and len(normalized & previous) / len(union) >= 0.62:
+                return True
+        return False
+
+    def _unique_fallback_question(self, focus_skill: str) -> str:
+        fallbacks = [
+            f"Using {focus_skill}, describe a decision you made, the alternatives you rejected, and the measurable outcome.",
+            f"What is the most difficult production issue you have faced with {focus_skill}, and how did you verify the resolution?",
+            f"How would you teach an important {focus_skill} concept to a junior engineer using an example from your work?",
+            f"Describe one limitation of {focus_skill} and when you would deliberately choose a different technology.",
+            "Choose one project from your background and explain what you would redesign today and why.",
+        ]
+        for question in fallbacks:
+            if not self._is_repeated_question(question):
+                return question
+        return f"Provide another concrete example from your experience with {focus_skill}, focusing on evidence and results."
     def _resume_focus(self) -> str:
         if self.resume.skills:
             return self.resume.skills[self._question_count % len(self.resume.skills)]
@@ -462,3 +550,9 @@ class TechnicalInterviewAgent:
         technical = [item.score for item in competencies if item.name != "Communication Skills"]
         competency_avg = round(sum(technical) / max(len(technical), 1))
         return round((skill_avg * 0.55) + (competency_avg * 0.45))
+
+
+
+
+
+

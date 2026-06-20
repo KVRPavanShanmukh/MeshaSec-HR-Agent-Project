@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import sys
 import tempfile
@@ -9,6 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from hr_agent.agent import TechnicalInterviewAgent
+from hr_agent.avatar import AvatarAnimator
 from hr_agent.confidence import ConfidenceAnalyzer
 from hr_agent.emailer import EmailSettings, send_report_email
 from hr_agent.integrity import IntegrityMonitor
@@ -60,7 +61,10 @@ class EnterpriseHRApp(tk.Tk):
         self.camera_image = None
         self.logo_image = None
         self.avatar_image = None
+        self.avatar_animator = None
+        self.generating_question = False
         self.camera_running = False
+        self.camera_loop_active = False
         self.recording = False
         self.device_status = None
         self.session_dir = None
@@ -68,6 +72,8 @@ class EnterpriseHRApp(tk.Tk):
         self.last_confidence_sample = 0.0
         self.last_focus_loss = 0.0
         self.last_webcam_issue = 0.0
+        self.last_paste_event = 0.0
+        self.last_copy_event = 0.0
 
         self.profile_vars = {
             "name": tk.StringVar(),
@@ -90,6 +96,7 @@ class EnterpriseHRApp(tk.Tk):
         }
         self.feature_vars = {
             "voice_interview": tk.BooleanVar(value=True),
+            "question_voice": tk.BooleanVar(value=True),
             "confidence_analysis": tk.BooleanVar(value=True),
             "integrity_monitoring": tk.BooleanVar(value=True),
             "recording_package": tk.BooleanVar(value=True),
@@ -266,41 +273,47 @@ class EnterpriseHRApp(tk.Tk):
     def _resume_screen(self) -> None:
         frame = self.screens["resume"]
         self._screen_title(frame, "Resume Upload", "Upload a PDF or DOCX resume. The interview is generated from detected skills, projects, technologies, and experience.")
-        form = self._card(frame)
+        setup_grid = ttk.Frame(frame)
+        setup_grid.pack(fill="x", pady=(0, 12))
+        setup_grid.columnconfigure(0, weight=3, uniform="resume_setup")
+        setup_grid.columnconfigure(1, weight=2, uniform="resume_setup")
+
+        form = ttk.Frame(setup_grid, style="Card.TFrame", padding=14)
+        form.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         for row, (label, key) in enumerate([
-            ("Candidate Name", "name"),
-            ("Candidate Email", "email"),
-            ("Role / Position", "role"),
-            ("Experience Years", "experience_years"),
-            ("Human HR Email", "hr_email"),
+            ("Candidate Name", "name"), ("Candidate Email", "email"), ("Role / Position", "role"),
+            ("Experience Years", "experience_years"), ("Human HR Email", "hr_email"),
         ]):
-            ttk.Label(form, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=8)
-            ttk.Entry(form, textvariable=self.profile_vars[key], width=56).grid(row=row, column=1, sticky="ew", padx=(14, 0), pady=8)
-        ttk.Label(form, text="Minimum Questions", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=8)
-        ttk.Spinbox(form, from_=10, to=20, textvariable=self.profile_vars["max_questions"], width=8).grid(row=5, column=1, sticky="w", padx=(14, 0), pady=8)
+            ttk.Label(form, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(form, textvariable=self.profile_vars[key], width=42).grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Label(form, text="Interview Questions", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="10 (fixed)", style="Card.TLabel").grid(row=5, column=1, sticky="w", padx=(12, 0), pady=4)
         form.columnconfigure(1, weight=1)
 
-        options = self._card(frame)
+        options = ttk.Frame(setup_grid, style="Card.TFrame", padding=14)
+        options.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         ttk.Label(options, text="Interview Setup", style="H2.TLabel").pack(anchor="w")
-        ttk.Label(options, text="AI Interviewer Voice", style="Card.TLabel").pack(anchor="w", pady=(10, 4))
+        ttk.Label(options, text="AI Interviewer Voice", style="Card.TLabel").pack(anchor="w", pady=(8, 3))
         ttk.Radiobutton(options, text="Shanmukh - Male voice", variable=self.profile_vars["interviewer"], value="Shanmukh").pack(anchor="w")
         ttk.Radiobutton(options, text="Yashna - Female voice", variable=self.profile_vars["interviewer"], value="Yashna").pack(anchor="w")
-        ttk.Label(options, text="Candidate Environment", style="Card.TLabel").pack(anchor="w", pady=(14, 4))
-        ttk.Radiobutton(options, text="Normal user - Zoom-style dynamic interview", variable=self.profile_vars["interview_mode"], value="normal").pack(anchor="w")
-        ttk.Radiobutton(options, text="Physically handicapped user - assisted reading controls", variable=self.profile_vars["interview_mode"], value="accessible").pack(anchor="w")
+        ttk.Label(options, text="Candidate Environment", style="Card.TLabel").pack(anchor="w", pady=(10, 3))
+        ttk.Radiobutton(options, text="Normal user - Zoom-style interview", variable=self.profile_vars["interview_mode"], value="normal").pack(anchor="w")
+        ttk.Radiobutton(options, text="Assisted user - reading controls", variable=self.profile_vars["interview_mode"], value="accessible").pack(anchor="w")
 
-        upload = self._card(frame)
-        ttk.Label(upload, text="Mandatory Resume", style="H2.TLabel").pack(anchor="w")
+        upload = ttk.Frame(frame, style="Card.TFrame", padding=14)
+        upload.pack(fill="x")
+        ttk.Label(upload, text="Resume / CV (Optional)", style="H2.TLabel").pack(anchor="w")
         row = ttk.Frame(upload, style="Card.TFrame")
-        row.pack(fill="x", pady=(10, 8))
+        row.pack(fill="x", pady=(8, 6))
         ttk.Entry(row, textvariable=self.profile_vars["resume_path"]).pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Choose PDF/DOCX", command=self.choose_resume).pack(side="left", padx=(10, 0))
         self.resume_progress = ttk.Progressbar(upload, mode="indeterminate")
-        self.resume_progress.pack(fill="x", pady=(12, 4))
-        self.resume_status = ttk.Label(upload, text="Resume not uploaded yet.", style="Muted.TLabel")
-        self.resume_status.pack(anchor="w")
-        ttk.Button(frame, text="Continue To Device Checks", style="Accent.TButton", command=lambda: self.show_screen("prep")).pack(anchor="e")
-
+        self.resume_progress.pack(fill="x", pady=(8, 3))
+        bottom = ttk.Frame(upload, style="Card.TFrame")
+        bottom.pack(fill="x", pady=(4, 0))
+        self.resume_status = ttk.Label(bottom, text="No resume uploaded. General questions will be used.", style="Muted.TLabel")
+        self.resume_status.pack(side="left", anchor="w")
+        ttk.Button(bottom, text="Continue To Device Checks", style="Accent.TButton", command=lambda: self.show_screen("prep")).pack(side="right")
     def _prep_screen(self) -> None:
         frame = self.screens["prep"]
         self._screen_title(frame, "Interview Preparation", "Camera and microphone access are required before the AI interview can begin.")
@@ -310,10 +323,14 @@ class EnterpriseHRApp(tk.Tk):
         self.microphone_status = self._status_card(grid, "Microphone Permission", "Not checked")
         self.audio_test_status = self._status_card(grid, "Audio Test", "Pending")
 
-        preview = self._card(frame)
+        preview = ttk.Frame(frame, style="Card.TFrame", padding=20)
+        preview.pack(fill="both", expand=True, pady=(0, 16))
         ttk.Label(preview, text="Camera Preview", style="H2.TLabel").pack(anchor="w")
-        self.camera_label = tk.Label(preview, text="Run device check to preview camera", bg="#102030", fg="#dbeafe", height=22, font=("Segoe UI", 11))
-        self.camera_label.pack(fill="both", expand=True, pady=(10, 0))
+        self.camera_stage = tk.Frame(preview, bg="#003845", highlightthickness=1, highlightbackground="#0A9396")
+        self.camera_stage.pack(fill="both", expand=True, pady=(10, 0))
+        self.camera_stage.pack_propagate(False)
+        self.camera_label = tk.Label(self.camera_stage, text="Run the device check to preview your camera", bg="#003845", fg="#E0FBFC", font=("Segoe UI", 11))
+        self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
         actions = ttk.Frame(frame)
         actions.pack(fill="x")
         ttk.Button(actions, text="Run Camera & Microphone Check", style="Accent.TButton", command=self.run_device_check).pack(side="left")
@@ -342,19 +359,27 @@ class EnterpriseHRApp(tk.Tk):
         self.interviewer_title = ttk.Label(left, text="AI HR Interviewer", style="H2.TLabel")
         self.interviewer_title.pack(anchor="w")
         video_grid = ttk.Frame(left, style="Card.TFrame")
-        video_grid.pack(fill="x", pady=(8, 12))
-        self.agent_panel = tk.Label(video_grid, text="AI Interviewer", bg="#edf4fb", fg=BRAND, width=54, height=16)
-        self.agent_panel.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        self.user_panel = tk.Label(video_grid, text="Candidate camera preview", bg="#102030", fg="#dbeafe", width=54, height=16)
-        self.user_panel.pack(side="left", fill="both", expand=True)
+        video_grid.pack(fill="both", expand=True, pady=(6, 8))
+        video_grid.columnconfigure(0, weight=1, uniform="video_tile")
+        video_grid.columnconfigure(1, weight=1, uniform="video_tile")
+        video_grid.rowconfigure(0, weight=1, minsize=180)
+        self.agent_panel = tk.Label(video_grid, text="AI Interviewer", bg="#DFF6FA", fg=BRAND)
+        self.agent_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.user_panel = tk.Label(video_grid, text="Candidate camera preview", bg="#003845", fg="#E0FBFC")
+        self.user_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         self._load_avatar()
 
-        self.question_box = tk.Text(left, height=6, wrap="word", font=("Segoe UI", 12), bg="#f8fbff", relief="flat")
-        self.question_box.pack(fill="x", pady=(10, 14))
+        self.question_box = tk.Text(left, height=3, wrap="word", font=("Segoe UI", 11), bg="#f8fbff", relief="flat")
+        self.question_box.pack(fill="x", pady=(4, 8))
         self.question_box.configure(state="disabled")
         ttk.Label(left, text="Candidate Response", style="H2.TLabel").pack(anchor="w")
-        self.answer_box = tk.Text(left, height=12, wrap="word", font=("Segoe UI", 11), bg="#ffffff")
-        self.answer_box.pack(fill="both", expand=True, pady=(10, 14))
+        self.answer_box = tk.Text(left, height=4, wrap="word", font=("Segoe UI", 11), bg="#ffffff")
+        self.answer_box.pack(fill="x", pady=(6, 8))
+        self.answer_box.bind("<<Paste>>", self._on_answer_paste, add="+")
+        self.answer_box.bind("<Control-v>", self._on_answer_paste, add="+")
+        self.answer_box.bind("<Shift-Insert>", self._on_answer_paste, add="+")
+        self.answer_box.bind("<<Copy>>", self._on_answer_copy, add="+")
+        self.answer_box.bind("<Control-c>", self._on_answer_copy, add="+")
         actions = ttk.Frame(left, style="Card.TFrame")
         actions.pack(fill="x")
         self.assist_controls = ttk.Frame(actions, style="Card.TFrame")
@@ -363,11 +388,18 @@ class EnterpriseHRApp(tk.Tk):
         self.speak_button.pack(side="left")
         self.stop_speak_button = ttk.Button(self.assist_controls, text="Stop Reading", command=self.stop_reading)
         self.stop_speak_button.pack(side="left", padx=(10, 0))
+        self.voice_toggle = ttk.Checkbutton(actions, text="Voice", variable=self.feature_vars["question_voice"], command=self._toggle_question_voice)
+        self.voice_toggle.pack(side="left")
+        self.repeat_button = ttk.Button(actions, text="Repeat", command=self.repeat_question)
+        self.repeat_button.pack(side="left", padx=(6, 0))
+        self.skip_voice_button = ttk.Button(actions, text="Skip Voice", command=self.stop_reading)
+        self.skip_voice_button.pack(side="left", padx=(6, 0))
         self.record_button = ttk.Button(actions, text="Start Recording", command=self.start_voice_recording)
-        self.record_button.pack(side="left", padx=(10, 0))
+        self.record_button.pack(side="left", padx=(6, 0))
         self.stop_record_button = ttk.Button(actions, text="Stop Recording", command=self.stop_voice_recording, state="disabled")
-        self.stop_record_button.pack(side="left", padx=(10, 0))
-        ttk.Button(actions, text="Submit Answer", style="Accent.TButton", command=self.submit_answer).pack(side="right")
+        self.stop_record_button.pack(side="left", padx=(6, 0))
+        self.submit_button = ttk.Button(actions, text="Submit & Next Question", style="Accent.TButton", command=self.submit_answer)
+        self.submit_button.pack(side="right")
         self.voice_status = ttk.Label(left, text="Voice status: ready", style="Muted.TLabel")
         self.voice_status.pack(anchor="w", pady=(8, 0))
 
@@ -413,16 +445,21 @@ class EnterpriseHRApp(tk.Tk):
         self._screen_title(frame, "Final HR Report Dashboard", "This is the same HR-facing report, enhanced with visual performance analytics and transcript-based evidence.")
         top = ttk.Frame(frame)
         top.pack(fill="x")
-        self.score_canvas = tk.Canvas(top, height=260, bg=SURFACE, highlightthickness=0)
+        self.score_canvas = tk.Canvas(top, height=190, bg=SURFACE, highlightthickness=0)
         self.score_canvas.pack(side="left", fill="both", expand=True, padx=(0, 14))
-        self.radar_canvas = tk.Canvas(top, height=260, width=330, bg=SURFACE, highlightthickness=0)
+        self.radar_canvas = tk.Canvas(top, height=190, width=330, bg=SURFACE, highlightthickness=0)
         self.radar_canvas.pack(side="right", fill="y")
         controls = ttk.Frame(frame)
-        controls.pack(fill="x", pady=(14, 12))
+        controls.pack(fill="x", pady=(10, 6))
         ttk.Button(controls, text="Refresh Dashboard", style="Accent.TButton", command=self.refresh_dashboard).pack(side="left")
-        ttk.Button(controls, text="Download PDF Report", command=self.save_pdf_report).pack(side="left", padx=(10, 0))
-        ttk.Button(controls, text="Email Report", command=self.email_report).pack(side="left", padx=(10, 0))
-        ttk.Button(controls, text="Download Interview Package", command=self.download_interview_package).pack(side="left", padx=(10, 0))
+        ttk.Button(controls, text="Download PDF Report", command=self.save_pdf_report).pack(side="left", padx=(8, 0))
+        ttk.Button(controls, text="Email Report", command=self.email_report).pack(side="left", padx=(8, 0))
+        ttk.Button(controls, text="Download Interview Package", command=self.download_interview_package).pack(side="left", padx=(8, 0))
+        manual_controls = ttk.Frame(frame)
+        manual_controls.pack(fill="x", pady=(0, 8))
+        ttk.Button(manual_controls, text="View Detailed Manual", command=self.show_instruction_manual).pack(side="left")
+        ttk.Button(manual_controls, text="Download Manual PDF", command=self.download_instruction_manual).pack(side="left", padx=(8, 0))
+        ttk.Button(manual_controls, text="Next: Meeting Workflow", style="Success.TButton", command=lambda: self.show_screen("meeting")).pack(side="right")
         report_frame = ttk.Frame(frame)
         report_frame.pack(fill="both", expand=True)
         self.report_view = tk.Text(report_frame, wrap="word", font=("Consolas", 9), bg=SURFACE)
@@ -431,6 +468,94 @@ class EnterpriseHRApp(tk.Tk):
         self.report_view.pack(side="left", fill="both", expand=True)
         self.report_scroll.pack(side="right", fill="y")
 
+    def download_instruction_manual(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Download AI HR Agent Instruction Manual",
+            defaultextension=".pdf",
+            initialfile="MESHASEC_AI_HR_Agent_Instruction_Manual.pdf",
+            filetypes=[("PDF files", "*.pdf")],
+        )
+        if not path:
+            return
+        try:
+            from reportlab.lib.colors import HexColor
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+            styles = getSampleStyleSheet()
+            title_style = ParagraphStyle("ManualTitle", parent=styles["Title"], textColor=HexColor(BRAND), alignment=TA_CENTER, spaceAfter=18)
+            heading = ParagraphStyle("ManualHeading", parent=styles["Heading2"], textColor=HexColor(BRAND), spaceBefore=10, spaceAfter=6)
+            body = ParagraphStyle("ManualBody", parent=styles["BodyText"], leading=15, spaceAfter=7)
+            doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=0.65*inch, leftMargin=0.65*inch, topMargin=0.6*inch, bottomMargin=0.6*inch, title="MESHASEC AI HR Agent Instruction Manual")
+            story = [Paragraph("MESHASEC AI HR Agent", title_style), Paragraph("Detailed User and HR Administrator Manual", styles["Heading2"]), Spacer(1, 8)]
+            sections = [
+                ("1. Candidate Setup", "Open Resume Upload. Enter candidate name, email, role, experience, and the Human HR email. Select Shanmukh or Yashna and choose Normal or Assisted mode."),
+                ("2. Resume Upload", "Choose a PDF or DOCX resume and wait for parsing to complete. The resume is processed privately to generate role-specific questions. Click Continue To Device Checks."),
+                ("3. Camera and Microphone", "Run Camera & Microphone Check. Confirm the complete landscape preview, then use Test Microphone. Resolve Windows privacy permission errors before continuing."),
+                ("4. Live Interview", "The agent asks one question and waits. Type an answer or use Start Recording and Stop Recording. Review the transcript, then click Submit & Next Question. Never close the application during an active interview."),
+                ("5. Assisted Mode", "Start Reading and Stop Reading controls are available in Assisted mode. Speaking speed can be changed in Email Settings."),
+                ("6. Integrity Monitoring", "The system timestamps application or tab switching, copy and paste actions, multiple faces, and webcam interruptions. These observations support review and are not automatic disqualification decisions."),
+                ("7. Face and Eye Analysis", "With explicit consent, the webcam estimates face visibility, eye-contact consistency, eye movement, engagement, and head stability. These are supportive indicators only and must not determine employment decisions."),
+                ("8. Report Dashboard", "Review competency visualizations, transcript-based evidence, confidence indicators, integrity events, strengths, weaknesses, and recommendation. Use the report scrollbar for the full report."),
+                ("9. Export and Email", "Download the PDF report, email it to Human HR, or download the interview package containing available recordings, transcripts, analytics, and reports."),
+                ("10. Privacy and Troubleshooting", "Obtain recording consent, protect exported files, and use a qualified human reviewer. If camera or microphone access fails, verify Windows Privacy settings and close other applications using the device. If email fails, verify SMTP host, port, sender email, TLS, and app password."),
+            ]
+            for title, content in sections:
+                story.extend([Paragraph(title, heading), Paragraph(content, body)])
+            doc.build(story)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"Unable to create manual PDF:\n{exc}")
+            return
+        messagebox.showinfo(APP_TITLE, f"Instruction manual downloaded:\n{path}")
+    def show_instruction_manual(self) -> None:
+        manual = tk.Toplevel(self)
+        manual.title("AI HR Agent - Instruction Manual")
+        manual.configure(bg=BG)
+        manual.geometry("900x650")
+        manual.transient(self)
+        manual.grab_set()
+        header = ttk.Frame(manual, style="Brand.TFrame", padding=18)
+        header.pack(fill="x")
+        ttk.Label(header, text="AI HR Agent Instruction Manual", style="Logo.TLabel").pack(anchor="w")
+        body = ttk.Frame(manual, padding=18)
+        body.pack(fill="both", expand=True)
+        text = tk.Text(body, wrap="word", font=("Segoe UI", 11), bg=SURFACE, relief="flat", padx=16, pady=14)
+        scroll = ttk.Scrollbar(body, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        text.insert("1.0", """GETTING STARTED
+
+1. Resume Upload
+Enter the candidate details, choose PDF/DOCX resume, select Normal or Assisted mode, and choose the interviewer voice. Resume details are processed privately and are not shown to the candidate.
+
+2. Equipment Check
+Run Camera & Microphone Check. Confirm the complete landscape camera preview is visible, then test the microphone before beginning.
+
+3. Answering Questions
+The interviewer asks one question at a time and waits. Type an answer or click Start Recording, speak naturally, then click Stop Recording. Review the transcript and click Submit & Next Question.
+
+4. Assisted Mode
+Use Start Reading and Stop Reading when manual voice playback controls are required.
+
+5. Integrity Monitoring
+During the live interview the app records application/tab switching, pasted response text, multiple faces, and webcam interruptions. Events include timestamps and appear in the final integrity report.
+
+6. Face and Eye Indicators
+With consent, the webcam estimates face visibility, eye-contact consistency, eye movement, and head stability. These are supportive indicators only and must not be used as final hiring criteria.
+
+7. Completing the Interview
+After the final answer, open the Report Dashboard to review scores, evidence, confidence indicators, integrity events, and the complete transcript.
+
+8. Exporting Results
+Use Download PDF Report, Email Report, or Download Interview Package. The package can contain audio, video, transcript, analytics, integrity information, and the final report.
+
+PRIVACY AND FAIR USE
+Obtain candidate consent before recording. Store exported packages securely. A qualified human reviewer must make all employment decisions.""")
+        text.configure(state="disabled")
+        ttk.Button(manual, text="Close Manual", style="Accent.TButton", command=manual.destroy).pack(pady=(0, 18))
     def _settings_screen(self) -> None:
         frame = self.screens["settings"]
         self._screen_title(frame, "Email Settings", "Configure SMTP delivery for Human HR report distribution.")
@@ -491,10 +616,10 @@ class EnterpriseHRApp(tk.Tk):
             return
         try:
             from PIL import Image, ImageTk
-            image = Image.open(avatar_path)
+            image = Image.open(avatar_path).convert("RGB")
             image.thumbnail((620, 348))
-            self.avatar_image = ImageTk.PhotoImage(image)
-            self.agent_panel.configure(image=self.avatar_image, text="")
+            self.avatar_animator = AvatarAnimator(self.agent_panel, image, ImageTk)
+            self.avatar_image = self.avatar_animator._frames[0]
         except Exception:
             self.agent_panel.configure(text=f"{self.interviewer_name()} - AI HR Interviewer")
 
@@ -544,7 +669,9 @@ class EnterpriseHRApp(tk.Tk):
         self.audio_test_status.configure(text="Run audio test before starting", foreground="#607086")
         if self.device_status.camera_available and self.media.start_camera():
             self.camera_running = True
-            self._refresh_camera_preview()
+            if not self.camera_loop_active:
+                self.camera_loop_active = True
+                self._refresh_camera_preview()
         else:
             self.camera_label.configure(text="Camera preview unavailable. Check Windows camera permissions.", image="")
 
@@ -581,7 +708,9 @@ class EnterpriseHRApp(tk.Tk):
         self._update_progress()
         self.show_screen("live")
         self.camera_running = True
-        self._refresh_camera_preview()
+        if not self.camera_loop_active:
+            self.camera_loop_active = True
+            self._refresh_camera_preview()
         if self.is_accessible_mode():
             self.voice_status.configure(text="Voice status: ready. Click Start Reading when the candidate is ready.")
         else:
@@ -589,6 +718,8 @@ class EnterpriseHRApp(tk.Tk):
             self.start_reading()
 
     def submit_answer(self) -> None:
+        if self.generating_question:
+            return
         answer = self.answer_box.get("1.0", "end").strip()
         if not answer:
             messagebox.showwarning(APP_TITLE, "Please capture or type the candidate response.")
@@ -596,17 +727,40 @@ class EnterpriseHRApp(tk.Tk):
         self.agent.record_answer(self.current_question, answer, self.current_focus)
         self._append_transcript(self.current_question, answer)
         self.answer_box.delete("1.0", "end")
-        if self.agent.should_finish(max(10, int(self.profile_vars["max_questions"].get()))):
+        if self.agent.should_finish(10):
             self.finish_interview()
             return
-        self.current_question, self.current_focus = self.agent.next_question(self._profile())
-        self._set_question(self.current_question)
-        self._update_progress()
-        if self.is_accessible_mode():
-            self.voice_status.configure(text="Voice status: ready. Click Start Reading for the next question.")
-        else:
-            self.start_reading()
+        self.generating_question = True
+        self.submit_button.configure(state="disabled", text="Preparing...")
+        self.record_button.configure(state="disabled")
+        self._set_question("Preparing your next personalized question...")
+        self.voice_status.configure(text="AI is preparing the next question from your resume and latest answer...")
+        profile = self._profile()
+        threading.Thread(target=self._generate_next_question_worker, args=(profile,), daemon=True).start()
 
+    def _generate_next_question_worker(self, profile: CandidateProfile) -> None:
+        try:
+            question, focus = self.agent.next_question(profile)
+            self.after(0, lambda: self._finish_next_question(question, focus, ""))
+        except Exception as exc:
+            self.after(0, lambda: self._finish_next_question("Tell me about a technical challenge you solved, your approach, and the result.", "Problem Solving", str(exc)))
+
+    def _finish_next_question(self, question: str, focus: str, error: str) -> None:
+        self.generating_question = False
+        self.current_question, self.current_focus = question, focus
+        self._set_question(question)
+        self._update_progress()
+        self.submit_button.configure(state="normal", text="Submit & Next Question")
+        self.record_button.configure(state="normal")
+        generation_error = error or self.agent.last_generation_error
+        if generation_error:
+            self.voice_status.configure(text=f"AI generation notice: {generation_error}")
+        elif self.agent.last_generation_source == "ai":
+            self.voice_status.configure(text="Personalized AI question ready.")
+        else:
+            self.voice_status.configure(text="Personalized fallback question ready.")
+        if self.feature_vars["question_voice"].get() and not self.is_accessible_mode():
+            self.start_reading()
     def _apply_interview_mode(self) -> None:
         if self.is_accessible_mode():
             self.assist_controls.pack(side="left")
@@ -672,26 +826,44 @@ class EnterpriseHRApp(tk.Tk):
             return
         messagebox.showinfo(APP_TITLE, f"Interview package created:\n{package}")
 
+    def _toggle_question_voice(self) -> None:
+        if not self.feature_vars["question_voice"].get():
+            self.stop_reading()
+            self.voice_status.configure(text="Question voice is off. Questions remain visible as text.")
+        else:
+            self.voice_status.configure(text="Question voice is on.")
+
+    def repeat_question(self) -> None:
+        if not self.feature_vars["question_voice"].get():
+            self.voice_status.configure(text="Turn Voice on to repeat the question aloud.")
+            return
+        self.stop_reading()
+        self.start_reading()
+
     def start_reading(self, prefix: str = "") -> None:
-        if not self.current_question:
+        if not self.current_question or not self.feature_vars["question_voice"].get():
             return
         self.voice_status.configure(text=f"Voice status: {self.interviewer_name()} is reading.")
         if not self.media.speak(prefix + self.current_question, int(self.profile_vars["voice_rate"].get()), self.interviewer_gender()):
-            messagebox.showinfo(APP_TITLE, "Text-to-speech is not available on this system.")
-            self.voice_status.configure(text="Voice status: text-to-speech unavailable")
+            self.voice_status.configure(text="Voice unavailable. The question remains visible as text.")
         else:
-            self.after(900, self._poll_speaking_status)
+            if self.avatar_animator:
+                self.avatar_animator.start()
+            self.after(300, self._poll_speaking_status)
 
     def stop_reading(self) -> None:
         self.media.stop_speaking()
-        self.voice_status.configure(text="Voice status: reading stopped")
+        if self.avatar_animator:
+            self.avatar_animator.stop()
+        self.voice_status.configure(text="Voice status: playback skipped/stopped")
 
     def _poll_speaking_status(self) -> None:
         if self.media.is_speaking():
-            self.after(700, self._poll_speaking_status)
+            self.after(250, self._poll_speaking_status)
         else:
+            if self.avatar_animator:
+                self.avatar_animator.stop()
             self.voice_status.configure(text="Voice status: ready")
-
     def start_voice_recording(self) -> None:
         if not self.feature_vars["voice_interview"].get():
             messagebox.showinfo(APP_TITLE, "Voice interview module is disabled in Settings.")
@@ -781,10 +953,6 @@ class EnterpriseHRApp(tk.Tk):
         messagebox.showinfo(APP_TITLE, f"Enhanced visual report emailed to {settings.hr_email}.")
 
     def _can_enter_live(self) -> bool:
-        if not self.profile_vars["resume_path"].get().strip() or not self.resume.raw_text:
-            messagebox.showwarning(APP_TITLE, "Resume upload is mandatory before starting the interview.")
-            self.show_screen("resume")
-            return False
         if not self.device_status:
             messagebox.showwarning(APP_TITLE, "Run camera and microphone checks before starting the interview.")
             self.show_screen("prep")
@@ -884,7 +1052,7 @@ class EnterpriseHRApp(tk.Tk):
             self.recorder.append_transcript(index, question, answer)
 
     def _update_progress(self) -> None:
-        total = max(10, int(self.profile_vars["max_questions"].get()))
+        total = 10
         done = len(self.agent.turns)
         self.progress.configure(value=(done / total) * 100)
         self.progress_label.configure(text=f"Question {done + 1} / {total}")
@@ -897,7 +1065,13 @@ class EnterpriseHRApp(tk.Tk):
         if not prep_visible and not live_visible:
             self.after(300, self._refresh_camera_preview)
             return
-        width, height = (1280, 720) if prep_visible else (620, 348)
+        target = self.camera_stage if prep_visible else self.user_panel
+        available_width = max(target.winfo_width(), 640 if prep_visible else 420)
+        available_height = max(target.winfo_height(), 360 if prep_visible else 236)
+        width = min(available_width, int(available_height * 16 / 9))
+        height = min(available_height, int(width * 9 / 16))
+        width = max(320, width)
+        height = max(180, height)
         frame = self.media.read_camera_frame(width, height)
         if frame:
             self.camera_image = frame
@@ -928,8 +1102,26 @@ class EnterpriseHRApp(tk.Tk):
             if self.feature_vars["integrity_monitoring"].get():
                 self.integrity_monitor.observe_faces(metric.face_count)
 
-    def _on_focus_lost(self, _event) -> None:
+    def _on_answer_copy(self, _event=None) -> None:
         if self.screen.get() != "live" or not self.feature_vars["integrity_monitoring"].get():
+            return
+        now = time.time()
+        if now - self.last_copy_event > 0.5:
+            self.integrity_monitor.copy_detected()
+            self.last_copy_event = now
+    def _on_answer_paste(self, _event=None) -> None:
+        if self.screen.get() != "live" or not self.feature_vars["integrity_monitoring"].get():
+            return
+        now = time.time()
+        if now - self.last_paste_event > 0.5:
+            self.integrity_monitor.paste_detected()
+            self.last_paste_event = now
+    def _on_focus_lost(self, _event) -> None:
+        if self.screen.get() == "live" and self.feature_vars["integrity_monitoring"].get():
+            self.after(250, self._confirm_application_focus_loss)
+
+    def _confirm_application_focus_loss(self) -> None:
+        if self.screen.get() != "live" or self.focus_displayof() is not None:
             return
         now = time.time()
         if now - self.last_focus_loss > 3:
@@ -941,6 +1133,7 @@ class EnterpriseHRApp(tk.Tk):
 
     def _close_app(self) -> None:
         self.camera_running = False
+        self.camera_loop_active = False
         self.media.stop_speaking()
         self.media.stop_camera()
         self.destroy()
@@ -983,3 +1176,24 @@ class EnterpriseHRApp(tk.Tk):
 if __name__ == "__main__":
     app = EnterpriseHRApp()
     app.mainloop()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

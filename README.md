@@ -1,124 +1,77 @@
-# AI HR Technical Interview Agent
+﻿# MESHASEC AI HR Interview Agent 2.0
 
-A downloadable enterprise desktop HR interview assistant built with Python and Tkinter.
+A standalone Windows desktop interview platform with resume-driven technical questioning, voice interviews, webcam analytics, integrity monitoring, evidence-based evaluation, enterprise PDF reporting, email automation, and downloadable interview packages.
 
-The app interviews technical candidates through an enterprise-style guided workflow, adapts follow-up questions based on resume content and answers, extracts skills, scores technical competencies with evidence, generates a branded HR report, and emails the report to a human HR contact.
+## Install and Run
 
-## Features
+End users should use the Windows installer in `installer_output` or launch `dist\AI HR Agent.exe`. No terminal or command prompt is required.
 
-- Adaptive technical interview flow
-- Enterprise multi-screen interface: welcome, resume upload, preparation, live interview, completion, dashboard
-- Mandatory PDF/DOCX resume upload
-- Camera and microphone readiness checks
-- AI interviewer speech output and microphone answer capture
-- Fullscreen-only interview experience
-- Live camera preview during preparation and interview
-- Human-like AI interviewer avatar and persona
-- Start Reading / Stop Reading voice playback controls
-- Natural pronunciation handling for technical terms such as CI/CD
-- Shanmukh male interviewer and Yashna female interviewer options
-- Normal user and physically handicapped user interview environments
-- Skill extraction for languages, frameworks, databases, cloud tools, and development practices
-- Technical depth verification through progressive follow-up questions
-- Communication and explanation analysis
-- Evidence-backed competency scoring
-- Candidate analytics dashboard with score visualizations
-- Branded enterprise PDF report generation based only on interview answers
-- SMTP email delivery to HR
-- Optional OpenAI integration through `OPENAI_API_KEY`
-- Local heuristic fallback when no API key is configured
+## Enterprise Interview Flow
 
-## Run From Source
+1. Enter candidate and HR details.
+2. Choose Shanmukh or Yashna and select Normal or Assisted mode.
+3. Upload a PDF/DOCX resume. Parsing runs privately behind a loading indicator.
+4. Complete camera, microphone, and audio readiness checks.
+5. Conduct a Zoom-style interview with resume-based dynamic questions.
+6. Record voice answers with Start Recording / Stop Recording.
+7. Generate the final evidence-based report and email the enhanced PDF to HR.
+8. Download a ZIP interview package containing audio, video, transcript, integrity analysis, confidence analysis, and final report.
 
-```powershell
-python -m pip install -r requirements.txt
-python main.py
-```
+## Feature Modules
 
-## Optional AI Setup
+Modules can be enabled or disabled in Settings:
 
-Set an OpenAI API key before launching:
+- Voice recording and speech-to-text transcripts
+- Webcam confidence and engagement analysis
+- Interview integrity monitoring
+- Local recording package generation
 
-```powershell
-$env:OPENAI_API_KEY="your-api-key"
-python main.py
-```
+Confidence and emotion metrics are supportive indicators only and must not be treated as final hiring criteria.
 
-Without an API key, the app still runs using built-in interview logic and scoring heuristics.
+## Local Data
 
-## Email Setup
+Interview artifacts are stored under:
 
-Use the Settings tab in the app:
+`Documents\MESHASEC AI HR Interviews\<Candidate>\<Timestamp>`
 
-- SMTP Host: `smtp.gmail.com` for Gmail
-- SMTP Port: `587` for Gmail with TLS
-- Sender Email: your Gmail address, for example `yourname@gmail.com`
-- SMTP/App Password: your Gmail app password
-- HR recipient email: enter this in the Candidate tab as Human HR Email
+Each enabled session may contain:
 
-For Gmail, create an app password instead of using your normal account password.
+- `audio\question_XX.wav`
+- `video\candidate_camera.avi`
+- `transcript.txt`
+- `confidence_report.json`
+- `integrity_report.json`
+- `integrity_report.pdf`
+- `final_report.pdf`
+- A downloadable ZIP package
 
-Do not enter your email address in SMTP Host. The SMTP Host field must contain a mail server name such as `smtp.gmail.com`.
+## Email
 
-## Company Logo
+For Gmail use:
 
-Place your company logo in the `assets` folder with one of these names:
+- SMTP host: `smtp.gmail.com`
+- Port: `587`
+- TLS: enabled
+- Sender email: Gmail address
+- Password: Gmail App Password
 
-```text
-assets\company_logo.png
-assets\company_logo.jpg
-assets\logo.png
-assets\logo.jpg
-```
+## Developer Build
 
-The app automatically replaces the sidebar text logo with the provided image on launch.
+`build_exe.bat` installs dependencies and builds the standalone executable. Compile `installer\AI_HR_Agent.iss` with Inno Setup to create the installer wizard.
 
-## Report Policy
+## Privacy and Compliance
 
-Resume content is used only to personalize interview questions. Final scores, strengths, weaknesses, recommendations, and report evidence are generated solely from the interview answers.
+The application requests explicit camera and microphone readiness before interview start. Recording, confidence analysis, and integrity monitoring are configurable. Production deployment should include organizational consent, retention, access-control, and applicable employment/privacy-law review.
 
-## Voice Controls
+## Adaptive AI Questions
 
-During the live interview:
+The interview always contains exactly 10 questions. Question 1 is common to every candidate; questions 2-10 are generated from resume context and prior answers. If the AI service is unavailable, the built-in adaptive question bank is used automatically.
 
-- Normal mode uses a Zoom-style dynamic interview and reads each question automatically.
-- Physically handicapped mode shows `Start Reading` and `Stop Reading` controls.
-- `Start Reading` reads the current question only.
-- `Stop Reading` interrupts interviewer voice playback.
-- The interviewer waits for `Submit Answer` before moving to the next question.
-- Voice speed can be adjusted in Email Settings under Interviewer Voice.
-
-## Meeting Workflow
-
-The app includes a Meeting Workflow screen for the proposed Zoom/Google Meet recruitment flow. A production auto-join meeting agent requires a backend bot service with Zoom/Meet SDK/API approval, calendar integration, compliance review, and secure meeting recording/transcription handling.
-
-## Build A Windows Executable
-
-Build:
+Configure AI credentials only in the runtime environment, never in source code or UI:
 
 ```powershell
-build_exe.bat
+$env:OPENAI_API_KEY="your-key"
+$env:OPENAI_MODEL="gpt-4.1-mini"
 ```
 
-The executable will be created in:
-
-```text
-dist\AI HR Agent.exe
-```
-
-## Project Structure
-
-```text
-main.py
-hr_agent/
-  __init__.py
-  agent.py
-  emailer.py
-  media.py
-  models.py
-  pdf_report.py
-  report.py
-  resume_parser.py
-  storage.py
-```
-=======
+Voice playback can be enabled or disabled during the session. The avatar animation is provider-neutral and retains the existing HR image as its fallback.
